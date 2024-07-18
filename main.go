@@ -12,15 +12,24 @@ import (
 )
 
 type ScanResult struct {
-	Port int  `json:"port"`
-	Open bool `json:"open"`
-	// Protocol string `json:"protocol"`
-	Service string `json:"service"`
+	Port     int    `json:"port"`
+	Open     bool   `json:"open"`
+	Protocol string `json:"protocol"`
+	Service  string `json:"service"`
 }
 
 type ScanRequest struct {
-	Host  string `json:"host"`
-	Ports []int  `json:"ports"`
+	Host string `json:"host"`
+}
+
+type HostStatus struct {
+	Host      string `json:"host"`
+	Reachable bool   `json:"reachable"`
+}
+
+type FullScanResult struct {
+	Ping  HostStatus   `json:"ping"`
+	Ports []ScanResult `json:"ports"`
 }
 
 func main() {
@@ -38,9 +47,23 @@ func scanPorts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isValidHost(request.Host) {
+		http.Error(w, "Invalid hostname or IP address", http.StatusBadRequest)
+		return
+	}
+
+	// Perform ping check
+	pingResult := pingHost(request.Host)
+
+	// Scan specified ports
+	ports := []int{21, 22, 23, 25, 53, 80, 110, 143, 443, 3306, 5432, 6379, 27017}
 	results := []ScanResult{}
-	for _, port := range request.Ports {
-		result := ScanResult{Port: port, Service: identifyService(port)}
+	for _, port := range ports {
+		result := ScanResult{
+			Port:     port,
+			Protocol: "tcp",
+			Service:  identifyService(port),
+		}
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort(request.Host, strconv.Itoa(port)), 1*time.Second)
 		if err == nil {
 			result.Open = true
@@ -51,9 +74,71 @@ func scanPorts(w http.ResponseWriter, r *http.Request) {
 		results = append(results, result)
 	}
 
+	fullResult := FullScanResult{
+		Ping:  pingResult,
+		Ports: results,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	json.NewEncoder(w).Encode(fullResult)
 }
+
+func isValidHost(host string) bool {
+	// Check if the host is a valid IP address
+	if net.ParseIP(host) != nil {
+		return true
+	}
+
+	// Check if the host is a valid hostname
+	if _, err := net.LookupHost(host); err == nil {
+		return true
+	}
+
+	return false
+}
+
+func pingHost(host string) HostStatus {
+	pingable := false
+
+	conn, err := net.DialTimeout("udp", net.JoinHostPort(host, "12345"), 1*time.Second)
+	if err != nil {
+		return HostStatus{Host: host, Reachable: pingable}
+	}
+	defer conn.Close()
+
+	pingable = true
+	return HostStatus{Host: host, Reachable: pingable}
+}
+
+// func pingHost(host string) HostStatus {
+// 	pinger, err := ping.NewPinger(host)
+// 	if err != nil {
+// 		return HostStatus{Host: host, Reachable: false}
+// 	}
+// 	pinger.Count = 3
+// 	pinger.Timeout = 3 * time.Second
+// 	err = pinger.Run()
+// 	if err != nil {
+// 		return HostStatus{Host: host, Reachable: false}
+// 	}
+// 	stats := pinger.Statistics()
+// 	return HostStatus{Host: host, Reachable: stats.PacketsRecv > 0}
+// }
+
+// func pingHost(host string) HostStatus {
+// 	pinger, err := ping.NewPinger(host)
+// 	if err != nil {
+// 		return HostStatus{Host: host, Reachable: false}
+// 	}
+// 	pinger.Count = 3
+// 	pinger.Timeout = 3 * time.Second
+// 	err = pinger.Run()
+// 	if err != nil {
+// 		return HostStatus{Host: host, Reachable: false}
+// 	}
+// 	stats := pinger.Statistics()
+// 	return HostStatus{Host: host, Reachable: stats.PacketsRecv > 0}
+// }
 
 func identifyService(port int) string {
 	// Mapping of common ports to services
